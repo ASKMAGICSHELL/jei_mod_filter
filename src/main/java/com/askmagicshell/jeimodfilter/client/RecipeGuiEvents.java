@@ -1,44 +1,52 @@
 package com.askmagicshell.jeimodfilter.client;
 
-import com.mojang.blaze3d.platform.NativeImage;
+import com.askmagicshell.jeimodfilter.ClientConfig;
 import com.askmagicshell.jeimodfilter.JeiModFilterPlugin;
+import com.mojang.blaze3d.platform.NativeImage;
+import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemStack;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforgespi.language.IModInfo;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @EventBusSubscriber(modid = "jei_mod_filter", value = Dist.CLIENT)
 public final class RecipeGuiEvents {
     private static final String RECIPE_GUI_CLASS = "mezz.jei.gui.recipes.RecipesGui";
     private static final String CREATIVE_GUI_CLASS = "net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen";
-    private static final int PANEL_WIDTH = 148;
     private static final int PANEL_MAX_HEIGHT = 248;
     private static final int HEADER_HEIGHT = 25;
     private static final int ROW_HEIGHT = 20;
     private static final int PANEL_MARGIN = 6;
+    private static final int BUTTON_SIZE = 12;
     private static final Map<String, ResourceLocation> ICONS = new HashMap<>();
     private static final Map<String, Boolean> ICON_LOOKUPS = new HashMap<>();
+
     private static List<ModEntry> mods;
+    private static IJeiRuntime modsRuntime;
     private static PanelLayout lastLayout;
     private static int scrollOffset;
 
@@ -54,11 +62,17 @@ public final class RecipeGuiEvents {
         }
         IJeiRuntime runtime = JeiModFilterPlugin.getRuntime();
         if (runtime == null) return;
-        List<ModEntry> entries = getMods();
+
+        List<ModEntry> entries = getMods(runtime);
         PanelLayout layout = createLayout(screen);
         lastLayout = layout;
         clampScroll(entries, layout);
-        drawPanel(event.getGuiGraphics(), runtime, entries, layout, event.getMouseX(), event.getMouseY());
+
+        if (ClientConfig.panelHidden()) {
+            drawShowButton(event.getGuiGraphics(), layout, event.getMouseX(), event.getMouseY());
+        } else {
+            drawPanel(event.getGuiGraphics(), runtime, entries, layout, event.getMouseX(), event.getMouseY());
+        }
     }
 
     @SubscribeEvent
@@ -67,18 +81,43 @@ public final class RecipeGuiEvents {
         double mouseX = event.getMouseX();
         double mouseY = event.getMouseY();
         PanelLayout layout = lastLayout;
+
+        if (ClientConfig.panelHidden()) {
+            if (layout.showContains(mouseX, mouseY)) {
+                ClientConfig.setPanelHidden(false);
+                event.setCanceled(true);
+            }
+            return;
+        }
+
         if (!layout.contains(mouseX, mouseY) && !layout.clearContains(mouseX, mouseY)) return;
         IJeiRuntime runtime = JeiModFilterPlugin.getRuntime();
         if (runtime == null) return;
+
         if (layout.clearContains(mouseX, mouseY)) {
             runtime.getIngredientFilter().setFilterText("");
+            event.setCanceled(true);
+            return;
+        }
+        if (layout.hideContains(mouseX, mouseY)) {
+            ClientConfig.setPanelHidden(true);
+            event.setCanceled(true);
+            return;
+        }
+        if (layout.minusContains(mouseX, mouseY)) {
+            ClientConfig.setPanelWidth(ClientConfig.panelWidth() - 10);
+            event.setCanceled(true);
+            return;
+        }
+        if (layout.plusContains(mouseX, mouseY)) {
+            ClientConfig.setPanelWidth(ClientConfig.panelWidth() + 10);
             event.setCanceled(true);
             return;
         }
         if (layout.listContains(mouseX, mouseY)) {
             int row = (int) ((mouseY - layout.listTop()) / ROW_HEIGHT);
             int index = scrollOffset + row;
-            List<ModEntry> entries = getMods();
+            List<ModEntry> entries = getMods(runtime);
             if (index >= 0 && index < entries.size()) {
                 runtime.getIngredientFilter().setFilterText("@" + entries.get(index).modId());
                 event.setCanceled(true);
@@ -88,9 +127,11 @@ public final class RecipeGuiEvents {
 
     @SubscribeEvent
     public static void onMouseScrolled(ScreenEvent.MouseScrolled.Pre event) {
-        if (!isSupportedGui(event.getScreen()) || lastLayout == null ||
+        if (!isSupportedGui(event.getScreen()) || lastLayout == null || ClientConfig.panelHidden() ||
             !lastLayout.listContains(event.getMouseX(), event.getMouseY())) return;
-        int max = Math.max(0, getMods().size() - lastLayout.visibleRows());
+        IJeiRuntime runtime = JeiModFilterPlugin.getRuntime();
+        if (runtime == null) return;
+        int max = Math.max(0, getMods(runtime).size() - lastLayout.visibleRows());
         scrollOffset = Math.clamp(scrollOffset + (event.getScrollDeltaY() > 0 ? -1 : 1), 0, max);
         event.setCanceled(true);
     }
@@ -107,13 +148,28 @@ public final class RecipeGuiEvents {
         return isRecipeGui(screen) || isCreativeGui(screen);
     }
 
-    private static List<ModEntry> getMods() {
-        if (mods == null) {
+    private static List<ModEntry> getMods(IJeiRuntime runtime) {
+        if (mods == null || modsRuntime != runtime) {
+            Set<String> itemModIds = new HashSet<>();
+            var ingredientManager = runtime.getIngredientManager();
+            var itemHelper = ingredientManager.getIngredientHelper(VanillaTypes.ITEM_STACK);
+            for (ItemStack stack : ingredientManager.getAllIngredients(VanillaTypes.ITEM_STACK)) {
+                if (stack == null || stack.isEmpty()) continue;
+                String modId = itemHelper.getDisplayModId(stack);
+                if (modId == null || modId.isBlank()) {
+                    modId = BuiltInRegistries.ITEM.getKey(stack.getItem()).getNamespace();
+                }
+                if (modId != null && !modId.isBlank()) itemModIds.add(modId);
+            }
+
             mods = ModList.get().getMods().stream()
+                .filter(info -> itemModIds.contains(info.getModId()))
                 .map(info -> new ModEntry(info.getModId(), info.getDisplayName(), info))
                 .sorted(Comparator.comparing(ModEntry::displayName, String.CASE_INSENSITIVE_ORDER)
                     .thenComparing(ModEntry::modId))
                 .toList();
+            modsRuntime = runtime;
+            scrollOffset = 0;
         }
         return mods;
     }
@@ -147,15 +203,38 @@ public final class RecipeGuiEvents {
             }
         }
 
-        int height = Math.min(PANEL_MAX_HEIGHT, Math.max(120, guiHeight));
-        int x = guiX - PANEL_WIDTH - PANEL_MARGIN;
-        if (x < 4) x = guiX + guiWidth + PANEL_MARGIN;
-        if (x + PANEL_WIDTH > screen.width - 4) x = screen.width - PANEL_WIDTH - 4;
-        int y = Math.max(30, Math.min(guiY, screen.height - height - 8));
+        int width = ClientConfig.panelWidth();
+        int height;
+        int x;
+        int y;
+        if (isCreativeGui(screen)) {
+            x = guiX + guiWidth + PANEL_MARGIN;
+            width = Math.max(80, Math.min(width, screen.width - x - 4));
+            y = 3;
+            height = Math.max(80, screen.height - 6);
+        } else {
+            height = Math.min(PANEL_MAX_HEIGHT, Math.max(120, guiHeight));
+            x = guiX - width - PANEL_MARGIN;
+            if (x < 4) x = guiX + guiWidth + PANEL_MARGIN;
+            if (x + width > screen.width - 4) x = screen.width - width - 4;
+            y = Math.max(30, Math.min(guiY, screen.height - height - 8));
+        }
+
+        int right = x + width;
+        int buttonY = y + (HEADER_HEIGHT - BUTTON_SIZE) / 2;
+        int hideX = right - 5 - BUTTON_SIZE;
+        int clearX = hideX - 4 - BUTTON_SIZE;
+        int plusX = clearX - 4 - BUTTON_SIZE;
+        int minusX = plusX - 3 - BUTTON_SIZE;
         int[] clearButton = isRecipeGui(screen)
-            ? findSearchClearButton(screen, x, y)
-            : new int[]{x + PANEL_WIDTH - 20, y + 6};
-        return new PanelLayout(x, y, PANEL_WIDTH, height, clearButton[0], clearButton[1]);
+            ? findSearchClearButton(screen, x, y, width)
+            : new int[]{clearX, buttonY};
+
+        int showX = x;
+        int showY = Math.max(4, (screen.height - 42) / 2);
+        if (showX + 20 > screen.width - 4) showX = screen.width - 24;
+        return new PanelLayout(x, y, width, height, clearButton[0], clearButton[1],
+            minusX, buttonY, plusX, buttonY, hideX, buttonY, showX, showY);
     }
 
     private static int readFieldInt(Object target, String fieldName) throws ReflectiveOperationException {
@@ -172,7 +251,7 @@ public final class RecipeGuiEvents {
         throw new NoSuchFieldException(fieldName);
     }
 
-    private static int[] findSearchClearButton(Screen screen, int fallbackX, int fallbackY) {
+    private static int[] findSearchClearButton(Screen screen, int fallbackX, int fallbackY, int panelWidth) {
         try {
             Field overlayField = screen.getClass().getDeclaredField("ingredientListOverlay");
             overlayField.setAccessible(true);
@@ -186,8 +265,7 @@ public final class RecipeGuiEvents {
             int searchHeight = readInt(textField, "getHeight");
             return new int[]{searchX + searchWidth - 14, searchY + (searchHeight - 12) / 2};
         } catch (ReflectiveOperationException | RuntimeException ignored) {
-            // Keep a usable clear control in the panel header if JEI changes its search widget internals.
-            return new int[]{fallbackX + PANEL_WIDTH - 20, fallbackY + 6};
+            return new int[]{fallbackX + panelWidth - 5 - BUTTON_SIZE - 4 - BUTTON_SIZE, fallbackY + 6};
         }
     }
 
@@ -198,6 +276,15 @@ public final class RecipeGuiEvents {
     private static void clampScroll(List<ModEntry> entries, PanelLayout layout) {
         int max = Math.max(0, entries.size() - layout.visibleRows());
         scrollOffset = Math.clamp(scrollOffset, 0, max);
+    }
+
+    private static void drawShowButton(GuiGraphics graphics, PanelLayout layout, int mouseX, int mouseY) {
+        boolean hovered = layout.showContains(mouseX, mouseY);
+        graphics.fill(layout.showX(), layout.showY(), layout.showX() + 20, layout.showY() + 42,
+            hovered ? 0xF04B566B : 0xE9101118);
+        graphics.fill(layout.showX(), layout.showY(), layout.showX() + 1, layout.showY() + 42, 0xFF65718A);
+        graphics.drawCenteredString(Minecraft.getInstance().font, "▶",
+            layout.showX() + 10, layout.showY() + 16, 0xFFFFFFFF);
     }
 
     private static void drawPanel(
@@ -216,11 +303,14 @@ public final class RecipeGuiEvents {
         graphics.fill(right - 1, y, right, bottom, 0xFF65718A);
         graphics.drawString(Minecraft.getInstance().font, Component.literal("Mods"), x + 8, y + 8, 0xFFFFFFFF, false);
 
-        boolean clearHovered = layout.clearContains(mouseX, mouseY);
-        graphics.fill(layout.clearX(), layout.clearY(), layout.clearX() + 12, layout.clearY() + 12,
-            clearHovered ? 0xFF59647A : 0xFF3B4252);
-        graphics.drawCenteredString(Minecraft.getInstance().font, Component.literal("×"),
-            layout.clearX() + 6, layout.clearY() + 1, 0xFFFFFFFF);
+        drawHeaderButton(graphics, layout.minusX(), layout.buttonY(), "−",
+            layout.minusContains(mouseX, mouseY));
+        drawHeaderButton(graphics, layout.plusX(), layout.buttonY(), "+",
+            layout.plusContains(mouseX, mouseY));
+        drawHeaderButton(graphics, layout.clearX(), layout.clearY(), "×",
+            layout.clearContains(mouseX, mouseY));
+        drawHeaderButton(graphics, layout.hideX(), layout.buttonY(), "◀",
+            layout.hideContains(mouseX, mouseY));
 
         String currentFilter = runtime.getIngredientFilter().getFilterText();
         int listTop = layout.listTop();
@@ -241,17 +331,24 @@ public final class RecipeGuiEvents {
                 graphics.fill(x + 3, rowY, right - 3, rowY + ROW_HEIGHT, 0xFF303746);
             }
             drawModIcon(graphics, entry, x + 7, rowY + 2);
-            String label = Minecraft.getInstance().font.plainSubstrByWidth(entry.displayName(), PANEL_WIDTH - 39);
+            String label = Minecraft.getInstance().font.plainSubstrByWidth(entry.displayName(), layout.width() - 39);
             graphics.drawString(Minecraft.getInstance().font, label, x + 28, rowY + 6, 0xFFE8EAF0, false);
         }
         graphics.disableScissor();
         if (entries.isEmpty()) {
-            graphics.drawString(Minecraft.getInstance().font, "No mods found", x + 8, listTop + 8, 0xFFB0B4C0, false);
+            graphics.drawString(Minecraft.getInstance().font, "No JEI items found", x + 8, listTop + 8, 0xFFB0B4C0, false);
         } else if (entries.size() > layout.visibleRows()) {
             String counter = (scrollOffset + 1) + "-" + Math.min(scrollOffset + layout.visibleRows(), entries.size())
                 + "/" + entries.size();
             graphics.drawString(Minecraft.getInstance().font, counter, x + 8, bottom - 12, 0xFF9AA2B2, false);
         }
+    }
+
+    private static void drawHeaderButton(GuiGraphics graphics, int x, int y, String label, boolean hovered) {
+        graphics.fill(x, y, x + BUTTON_SIZE, y + BUTTON_SIZE,
+            hovered ? 0xFF59647A : 0xFF3B4252);
+        graphics.drawCenteredString(Minecraft.getInstance().font, label,
+            x + BUTTON_SIZE / 2, y + 1, 0xFFFFFFFF);
     }
 
     private static void drawModIcon(GuiGraphics graphics, ModEntry entry, int x, int y) {
@@ -299,15 +396,36 @@ public final class RecipeGuiEvents {
     private record ModEntry(String modId, String displayName, IModInfo info) {
     }
 
-    private record PanelLayout(int x, int y, int width, int height, int clearX, int clearY) {
+    private record PanelLayout(
+        int x, int y, int width, int height,
+        int clearX, int clearY,
+        int minusX, int minusY, int plusX, int plusY,
+        int hideX, int hideY, int showX, int showY
+    ) {
         int listTop() { return y + HEADER_HEIGHT; }
         int visibleRows() { return Math.max(1, (height - HEADER_HEIGHT - 8) / ROW_HEIGHT); }
         boolean contains(double mouseX, double mouseY) {
             return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
         }
         boolean clearContains(double mouseX, double mouseY) {
-            return mouseX >= clearX && mouseX < clearX + 12 &&
-                mouseY >= clearY && mouseY < clearY + 12;
+            return mouseX >= clearX && mouseX < clearX + BUTTON_SIZE &&
+                mouseY >= clearY && mouseY < clearY + BUTTON_SIZE;
+        }
+        boolean minusContains(double mouseX, double mouseY) {
+            return mouseX >= minusX && mouseX < minusX + BUTTON_SIZE &&
+                mouseY >= minusY && mouseY < minusY + BUTTON_SIZE;
+        }
+        boolean plusContains(double mouseX, double mouseY) {
+            return mouseX >= plusX && mouseX < plusX + BUTTON_SIZE &&
+                mouseY >= plusY && mouseY < plusY + BUTTON_SIZE;
+        }
+        boolean hideContains(double mouseX, double mouseY) {
+            return mouseX >= hideX && mouseX < hideX + BUTTON_SIZE &&
+                mouseY >= hideY && mouseY < hideY + BUTTON_SIZE;
+        }
+        boolean showContains(double mouseX, double mouseY) {
+            return mouseX >= showX && mouseX < showX + 20 &&
+                mouseY >= showY && mouseY < showY + 42;
         }
         boolean listContains(double mouseX, double mouseY) {
             return mouseX >= x + 3 && mouseX < x + width - 3 &&
