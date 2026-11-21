@@ -44,7 +44,7 @@ jobs:
           retention-days: 30
 
   release:
-    name: Publish GitHub Release
+    name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
@@ -55,9 +55,51 @@ jobs:
           name: jei-mod-filter-${{ github.ref_name }}
           path: dist
 
-      - name: Create release and attach mod jar
+      - name: Get release version
+        id: version
+        shell: bash
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release and attach mod jar
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          name: JEI Mod Filter ${{ steps.version.outputs.value }}
           generate_release_notes: true
           files: dist/*.jar
+
+      - name: Publish to Modrinth
+        if: ${{ vars.MODRINTH_PROJECT_ID != '' }}
+        uses: Kira-NT/mc-publish@v3.3
+        with:
+          modrinth-id: ${{ vars.MODRINTH_PROJECT_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          modrinth-dependencies: |
+            jei(required){modrinth:jei}
+          files: dist/*.jar
+          name: JEI Mod Filter ${{ steps.version.outputs.value }}
+          version: ${{ steps.version.outputs.value }}
+          version-type: release
+          changelog-file: CHANGELOG.md
+          loaders: neoforge
+          environment: client
+          game-versions: 1.21.1
+          java: 21
+
+      - name: Publish to CurseForge
+        if: ${{ vars.CURSEFORGE_PROJECT_ID != '' }}
+        uses: Kira-NT/mc-publish@v3.3
+        with:
+          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          curseforge-dependencies: |
+            jei(required){curseforge:238222}
+          files: dist/*.jar
+          name: JEI Mod Filter ${{ steps.version.outputs.value }}
+          version: ${{ steps.version.outputs.value }}
+          version-type: release
+          changelog-file: CHANGELOG.md
+          loaders: neoforge
+          environment: client
+          game-versions: 1.21.1
+          java: 21
