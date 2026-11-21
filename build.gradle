@@ -1,0 +1,45 @@
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+group = mod_group
+version = mod_version
+base { archivesName = mod_id }
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+repositories {
+    mavenCentral()
+    maven { name = 'BlameJared'; url = 'https://maven.blamejared.com' }
+}
+dependencies {
+    compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
+    runtimeOnly "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
+}
+neoForge {
+    version = neo_version
+    runs {
+        client {
+            client()
+            gameDirectory = project.file('run')
+        }
+    }
+    mods {
+        jei_mod_filter { sourceSet sourceSets.main }
+    }
+}
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+processResources {
+    def replaceProperties = [
+        mod_id: mod_id,
+        mod_name: 'JEI Mod Filter',
+        mod_version: mod_version,
+        minecraft_version: minecraft_version,
+        neo_version: neo_version
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/neoforge.mods.toml']) { expand replaceProperties }
+}
