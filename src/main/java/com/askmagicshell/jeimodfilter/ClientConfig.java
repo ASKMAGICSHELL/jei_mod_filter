@@ -13,6 +13,10 @@ public final class ClientConfig {
         BUILDER.comment("Whether the JEI mod filter panel starts hidden.")
             .define("panelHidden", false);
 
+    public static final ModConfigSpec.IntValue PANEL_MARGIN =
+        BUILDER.comment("Gap between the JEI mod filter panel and the game GUI in GUI pixels.")
+            .defineInRange("panelMargin", 6, 0, 40);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private ClientConfig() {
@@ -24,6 +28,10 @@ public final class ClientConfig {
 
     public static boolean panelHidden() {
         return PANEL_HIDDEN.get();
+    }
+
+    public static int panelMargin() {
+        return PANEL_MARGIN.get();
     }
 
     public static void setPanelWidth(int width) {

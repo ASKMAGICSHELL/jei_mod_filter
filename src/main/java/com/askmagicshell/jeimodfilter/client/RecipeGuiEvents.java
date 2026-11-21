@@ -40,7 +40,7 @@ public final class RecipeGuiEvents {
     private static final int PANEL_MAX_HEIGHT = 248;
     private static final int HEADER_HEIGHT = 25;
     private static final int ROW_HEIGHT = 20;
-    private static final int PANEL_MARGIN = 6;
+
     private static final int BUTTON_SIZE = 12;
     private static final Set<String> HIDDEN_MOD_IDS = Set.of("offroad", "simulated");
     private static final Map<String, ResourceLocation> ICONS = new HashMap<>();
@@ -206,18 +206,19 @@ public final class RecipeGuiEvents {
         }
 
         int width = ClientConfig.panelWidth();
+        int margin = ClientConfig.panelMargin();
         int height;
         int x;
         int y;
         if (isCreativeGui(screen)) {
-            x = guiX + guiWidth + PANEL_MARGIN;
+            x = guiX + guiWidth + margin;
             width = Math.max(80, Math.min(width, screen.width - x - 4));
             y = 3;
             height = Math.max(80, screen.height - 6);
         } else {
             height = Math.min(PANEL_MAX_HEIGHT, Math.max(120, guiHeight));
-            x = guiX - width - PANEL_MARGIN;
-            if (x < 4) x = guiX + guiWidth + PANEL_MARGIN;
+            x = guiX - width - margin;
+            if (x < 4) x = guiX + guiWidth + margin;
             if (x + width > screen.width - 4) x = screen.width - width - 4;
             y = Math.max(30, Math.min(guiY, screen.height - height - 8));
         }
