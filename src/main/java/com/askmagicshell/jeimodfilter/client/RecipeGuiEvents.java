@@ -30,6 +30,7 @@ import java.util.Optional;
 @EventBusSubscriber(modid = "jei_mod_filter", value = Dist.CLIENT)
 public final class RecipeGuiEvents {
     private static final String RECIPE_GUI_CLASS = "mezz.jei.gui.recipes.RecipesGui";
+    private static final String CREATIVE_GUI_CLASS = "net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen";
     private static final int PANEL_WIDTH = 148;
     private static final int PANEL_MAX_HEIGHT = 248;
     private static final int HEADER_HEIGHT = 25;
@@ -47,7 +48,7 @@ public final class RecipeGuiEvents {
     @SubscribeEvent
     public static void onScreenRender(ScreenEvent.Render.Post event) {
         Screen screen = event.getScreen();
-        if (!isRecipeGui(screen)) {
+        if (!isSupportedGui(screen)) {
             lastLayout = null;
             return;
         }
@@ -62,7 +63,7 @@ public final class RecipeGuiEvents {
 
     @SubscribeEvent
     public static void onMousePressed(ScreenEvent.MouseButtonPressed.Pre event) {
-        if (event.getButton() != 0 || !isRecipeGui(event.getScreen()) || lastLayout == null) return;
+        if (event.getButton() != 0 || !isSupportedGui(event.getScreen()) || lastLayout == null) return;
         double mouseX = event.getMouseX();
         double mouseY = event.getMouseY();
         PanelLayout layout = lastLayout;
@@ -87,7 +88,7 @@ public final class RecipeGuiEvents {
 
     @SubscribeEvent
     public static void onMouseScrolled(ScreenEvent.MouseScrolled.Pre event) {
-        if (!isRecipeGui(event.getScreen()) || lastLayout == null ||
+        if (!isSupportedGui(event.getScreen()) || lastLayout == null ||
             !lastLayout.listContains(event.getMouseX(), event.getMouseY())) return;
         int max = Math.max(0, getMods().size() - lastLayout.visibleRows());
         scrollOffset = Math.clamp(scrollOffset + (event.getScrollDeltaY() > 0 ? -1 : 1), 0, max);
@@ -96,6 +97,14 @@ public final class RecipeGuiEvents {
 
     private static boolean isRecipeGui(Screen screen) {
         return screen.getClass().getName().equals(RECIPE_GUI_CLASS);
+    }
+
+    private static boolean isCreativeGui(Screen screen) {
+        return screen.getClass().getName().equals(CREATIVE_GUI_CLASS);
+    }
+
+    private static boolean isSupportedGui(Screen screen) {
+        return isRecipeGui(screen) || isCreativeGui(screen);
     }
 
     private static List<ModEntry> getMods() {
@@ -114,24 +123,53 @@ public final class RecipeGuiEvents {
         int guiY = 48;
         int guiWidth = 176;
         int guiHeight = Math.max(120, screen.height - 96);
-        try {
-            Object properties = screen.getClass().getMethod("getProperties").invoke(screen);
-            if (properties != null) {
-                guiX = readInt(properties, "guiLeft");
-                guiY = readInt(properties, "guiTop");
-                guiWidth = readInt(properties, "guiXSize");
-                guiHeight = readInt(properties, "guiYSize");
+
+        if (isCreativeGui(screen)) {
+            try {
+                guiX = readFieldInt(screen, "leftPos");
+                guiY = readFieldInt(screen, "topPos");
+                guiWidth = readFieldInt(screen, "imageWidth");
+                guiHeight = readFieldInt(screen, "imageHeight");
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Keep a centered fallback if Minecraft changes its container screen fields.
             }
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-            // Fall back to JEI's usual centered recipe-view dimensions.
+        } else {
+            try {
+                Object properties = screen.getClass().getMethod("getProperties").invoke(screen);
+                if (properties != null) {
+                    guiX = readInt(properties, "guiLeft");
+                    guiY = readInt(properties, "guiTop");
+                    guiWidth = readInt(properties, "guiXSize");
+                    guiHeight = readInt(properties, "guiYSize");
+                }
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Fall back to JEI's usual centered recipe-view dimensions.
+            }
         }
+
         int height = Math.min(PANEL_MAX_HEIGHT, Math.max(120, guiHeight));
         int x = guiX - PANEL_WIDTH - PANEL_MARGIN;
         if (x < 4) x = guiX + guiWidth + PANEL_MARGIN;
         if (x + PANEL_WIDTH > screen.width - 4) x = screen.width - PANEL_WIDTH - 4;
         int y = Math.max(30, Math.min(guiY, screen.height - height - 8));
-        int[] clearButton = findSearchClearButton(screen, x, y);
+        int[] clearButton = isRecipeGui(screen)
+            ? findSearchClearButton(screen, x, y)
+            : new int[]{x + PANEL_WIDTH - 20, y + 6};
         return new PanelLayout(x, y, PANEL_WIDTH, height, clearButton[0], clearButton[1]);
+    }
+
+    private static int readFieldInt(Object target, String fieldName) throws ReflectiveOperationException {
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                return field.getInt(target);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(fieldName);
     }
 
     private static int[] findSearchClearButton(Screen screen, int fallbackX, int fallbackY) {
