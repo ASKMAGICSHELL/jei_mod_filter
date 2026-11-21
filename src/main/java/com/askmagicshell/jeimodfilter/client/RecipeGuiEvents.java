@@ -303,13 +303,13 @@ public final class RecipeGuiEvents {
         graphics.fill(right - 1, y, right, bottom, 0xFF65718A);
         graphics.drawString(Minecraft.getInstance().font, Component.literal("Mods"), x + 8, y + 8, 0xFFFFFFFF, false);
 
-        drawHeaderButton(graphics, layout.minusX(), layout.buttonY(), "−",
+        drawHeaderButton(graphics, layout.minusX(), layout.minusY(), "−",
             layout.minusContains(mouseX, mouseY));
-        drawHeaderButton(graphics, layout.plusX(), layout.buttonY(), "+",
+        drawHeaderButton(graphics, layout.plusX(), layout.plusY(), "+",
             layout.plusContains(mouseX, mouseY));
         drawHeaderButton(graphics, layout.clearX(), layout.clearY(), "×",
             layout.clearContains(mouseX, mouseY));
-        drawHeaderButton(graphics, layout.hideX(), layout.buttonY(), "◀",
+        drawHeaderButton(graphics, layout.hideX(), layout.hideY(), "◀",
             layout.hideContains(mouseX, mouseY));
 
         String currentFilter = runtime.getIngredientFilter().getFilterText();
