@@ -42,6 +42,7 @@ public final class RecipeGuiEvents {
     private static final int ROW_HEIGHT = 20;
     private static final int PANEL_MARGIN = 6;
     private static final int BUTTON_SIZE = 12;
+    private static final Set<String> HIDDEN_MOD_IDS = Set.of("offroad", "simulated");
     private static final Map<String, ResourceLocation> ICONS = new HashMap<>();
     private static final Map<String, Boolean> ICON_LOOKUPS = new HashMap<>();
 
@@ -164,6 +165,7 @@ public final class RecipeGuiEvents {
 
             mods = ModList.get().getMods().stream()
                 .filter(info -> itemModIds.contains(info.getModId()))
+                .filter(info -> !HIDDEN_MOD_IDS.contains(info.getModId()))
                 .map(info -> new ModEntry(info.getModId(), info.getDisplayName(), info))
                 .sorted(Comparator.comparing(ModEntry::displayName, String.CASE_INSENSITIVE_ORDER)
                     .thenComparing(ModEntry::modId))
